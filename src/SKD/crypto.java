@@ -116,4 +116,14 @@ public class crypto {
             return null;
         }
     }
+
+    public static String getBytesCheckSum(byte[] bytes) {
+        MD5Digest md = new MD5Digest();
+        md.update(bytes, 0, bytes.length);
+        byte[] md5Bytes = new byte[md.getDigestSize()];
+        md.doFinal(md5Bytes, 0);
+        org.bouncycastle.util.encoders.Hex.toHexString(md5Bytes);
+        return DatatypeConverter.printHexBinary(md5Bytes);
+
+    }
 }
