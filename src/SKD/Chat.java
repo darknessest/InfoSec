@@ -116,6 +116,7 @@ public class Chat extends Thread {
                 }
 
                 // Encrypting a message
+                // TODO: add sending long messages in batches
                 byte[] toSend = crypto.Encrypt(line);
 
                 // Sending the message

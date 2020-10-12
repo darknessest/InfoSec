@@ -64,11 +64,29 @@ public class crypto {
         return null;
     }
 
-    public byte[] Encrypt(byte[] plain_text) {
+    public byte[] Encrypt(byte[] data) throws IOException {
         if (type.equals("RSA")) {
-            return EncryptRsa(plain_text);
+//            System.out.println("SYSTEM: length of binary to encrypt " + data.length);
+            // checking for length constraint and splitting if needed
+            // TODO: add calculation of the longest possible 'message'/chunksize
+            if (data.length > 128) {
+                int chunk_size = 128;
+                int start = 0;
+                byte[] temp;
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+
+                for (int i = 0; i < data.length / (double) chunk_size; i++) {
+                    temp = Arrays.copyOfRange(data, start, start + chunk_size);
+//                    System.out.println("SYSTEM: length of temp binary to encrypt " + temp.length);
+                    bos.write(EncryptRsa(temp));
+                    start += chunk_size;
+                }
+                return bos.toByteArray();
+            }
+
+            return EncryptRsa(data);
         } else if (type.equals("DES")) {
-            return EncryptDes(session_key, plain_text);
+            return EncryptDes(session_key, data);
         }
         return null;
     }
@@ -82,11 +100,29 @@ public class crypto {
         return null;
     }
 
-    public byte[] Decrypt(byte[] plain_text) {
+    public byte[] Decrypt(byte[] data) throws IOException {
         if (type.equals("RSA")) {
-            return DecryptRsa(plain_text);
+//            System.out.println("Decrypting length: " + data.length + " -- " + org.bouncycastle.util.encoders.Hex.toHexString(data));
+            // with key size 1024, all messages has size 256
+            // TODO: add calculation of the longest possible 'message'/chunksize
+            if (data.length > 128) {
+
+                int chunk_size = 128;
+                int start = 0;
+                byte[] temp;
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+
+                for (int i = 0; i < data.length / (double) chunk_size; i++) {
+                    temp = Arrays.copyOfRange(data, start, start + chunk_size);
+//                    System.out.println("SYSTEM: length of temp binary to encrypt " + temp.length);
+                    bos.write(Decrypt(temp));
+                    start += chunk_size;
+                }
+                return bos.toByteArray();
+            }
+            return DecryptRsa(data);
         } else if (type.equals("DES")) {
-            return DecryptDes(session_key, plain_text);
+            return DecryptDes(session_key, data);
         }
         return null;
     }
@@ -186,8 +222,8 @@ public class crypto {
         //Encrypting the input bytes
         byte[] cipheredBytes = new byte[0];
         try {
-            System.out.println("Encrypting: " + org.bouncycastle.util.encoders.Hex.toHexString(plain_text));
-            cipheredBytes = RsaCipher.processBlock(plain_text, 0, org.bouncycastle.util.encoders.Hex.toHexString(plain_text).length());
+//            System.out.println("Encrypting length: " + org.bouncycastle.util.encoders.Hex.toHexString(plain_text));
+            cipheredBytes = RsaCipher.processBlock(plain_text, 0, plain_text.length);
         } catch (InvalidCipherTextException e) {
             e.printStackTrace();
         }
