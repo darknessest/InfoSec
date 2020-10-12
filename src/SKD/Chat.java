@@ -7,9 +7,9 @@ import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.Arrays;
 
 import static SKD.FileToSend.deserialize;
-import static SKD.crypto.*;
 
 public class Chat extends Thread {
 
@@ -25,6 +25,7 @@ public class Chat extends Thread {
 
     private static final String master_key = "2ae164ad";   // shared key
     private static String session_key = "";
+    private static crypto crypto;
 
     public Chat(boolean isSender) {
         super();
@@ -33,6 +34,7 @@ public class Chat extends Thread {
 
     private static void initServer(int port) {
         try {
+            int choice = 0;
             ServerSocket serverSocket = new ServerSocket(port);
             serverSocket.setSoTimeout(100000);  // 100 sec
 
@@ -46,16 +48,19 @@ public class Chat extends Thread {
             out = new DataOutputStream(socket.getOutputStream());
             out.flush();
 
+
             // Encrypting connection
             System.out.println("SYSTEM: encrypting connection");
-            session_key = genKey();
 
-            System.out.println("SYSTEM: session key: " + session_key);
-
-            byte[] enc_msg = Encrypt(master_key, session_key);
+            byte[] enc_msg = crypto.keyExchange(true, null);
 //            System.out.println("SYSTEM: encrypted message: " + org.bouncycastle.util.encoders.Hex.toHexString(enc_msg));
 
-            out.writeUTF(org.bouncycastle.util.encoders.Hex.toHexString(enc_msg));
+            out.write(enc_msg);
+
+            // only for asymmetric encryption
+            byte[] rpk = receiveBytes(2000, false);
+            System.out.println("server remote public" + Arrays.toString(rpk));
+            crypto.setRemotePublicKey(rpk);
 
         } catch (SocketTimeoutException s) {
             System.out.println("SYSTEM: Socket timed out!");
@@ -76,15 +81,22 @@ public class Chat extends Thread {
 
             // Encrypting connection
             System.out.println("SYSTEM: encrypting connection");
-            String rcvd_msg = in.readUTF();
-            System.out.println("SYSTEM: encrypted session key: " + rcvd_msg);
 
-            byte[] dec_msg = Decrypt(master_key, org.bouncycastle.util.encoders.Hex.decodeStrict(rcvd_msg));
-            String dec_message = new String(dec_msg, StandardCharsets.UTF_8)
-                    .replaceAll(String.valueOf((char) 0), ""); // some trailing NULLS mb present
+            // receiving their key
+            byte[] rcvd_msg = receiveBytes(1000, false);
+//            System.out.println("client: " + new String(rcvd_msg, StandardCharsets.UTF_8));
+            // saving remote public key
+            // sending my key (for asymmetric encryption only)
+            out.write(crypto.keyExchange(false, rcvd_msg));
 
-            session_key = dec_message;
-            System.out.println("SYSTEM: decrypted session key: " + dec_message);
+//            System.out.println("SYSTEM: encrypted session key: " + rcvd_msg);
+//
+//            byte[] dec_msg = crypto.DecryptDes(master_key, org.bouncycastle.util.encoders.Hex.decodeStrict(rcvd_msg));
+//            String dec_message = new String(dec_msg, StandardCharsets.UTF_8)
+//                    .replaceAll(String.valueOf((char) 0), ""); // some trailing NULLS mb present
+//
+//            session_key = dec_message;
+//            System.out.println("SYSTEM: decrypted session key: " + dec_message);
 
         } catch (IOException e) {
             e.printStackTrace();
@@ -93,22 +105,22 @@ public class Chat extends Thread {
 
     public void Send() {
         try {
-            String toSend = brin.readLine();
+            String line = brin.readLine();
+            if (line.length() > 0) {
+                // Checking for special words
+                if (line.equals(exit_word))
+                    running = false;
+                if (line.equals(send_file_word)) {
+                    sendFile();
+                    return;
+                }
 
-            // Checking for special words
-            if (toSend.equals(exit_word))
-                running = false;
-            if (toSend.equals(send_file_word)) {
-                sendFile();
-                return;
+                // Encrypting a message
+                byte[] toSend = crypto.Encrypt(line);
+
+                // Sending the message
+                out.write(toSend);
             }
-
-            // Encrypting a message
-            toSend = org.bouncycastle.util.encoders.Hex.toHexString(
-                    Encrypt(session_key, toSend));
-
-            // Sending the message
-            out.writeUTF(toSend);
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -116,25 +128,27 @@ public class Chat extends Thread {
 
     public void Receive() {
         try {
-            String toPrint = in.readUTF();
-            System.out.println(">>> ENC: " + toPrint);
+            byte[] bin_arr = receiveBytes(0, true);
+            if (bin_arr.length > 0) {
+                System.out.println(">>> ENC: " + org.bouncycastle.util.encoders.Hex.toHexString(bin_arr));
 
-            // Decrypting a message
-            toPrint = new String(Decrypt(session_key, toPrint), StandardCharsets.UTF_8)
-                    .replaceAll(String.valueOf((char) 0), "");
+                // Decrypting a message
+                String toPrint = new String(crypto.Decrypt(bin_arr), StandardCharsets.UTF_8)
+                        .replaceAll(String.valueOf((char) 0), "");
 
-            // Checking for special words
-            if (toPrint.equals(exit_word)) {
-                System.out.println("SYSTEM: other client left");
-                running = false;
+                // Checking for special words
+                if (toPrint.equals(exit_word)) {
+                    System.out.println("SYSTEM: other client left");
+                    running = false;
+                }
+                if (toPrint.equals(send_file_word)) {
+                    receiveFile();
+                    return;
+                }
+
+                // Printing the message
+                System.out.println(">>> " + toPrint);
             }
-            if (toPrint.equals(send_file_word)) {
-                receiveFile();
-                return;
-            }
-
-            // Printing the message
-            System.out.println(">>> " + toPrint);
         } catch (EOFException x) {
             System.out.println("SYSTEM: connection stopped abruptly, shutting down");
             running = false;
@@ -149,13 +163,20 @@ public class Chat extends Thread {
 
         // sending file
         if (Files.exists(Paths.get(filename))) {
-            FileToSend file = new FileToSend(filename, Files.readAllBytes(Paths.get(filename)));
             // notify about file sending
-            out.writeUTF(org.bouncycastle.util.encoders.Hex.toHexString(
-                    Encrypt(session_key, send_file_word)));
+            out.write(crypto.Encrypt(send_file_word));
 
-            // encrypting and sending
-            out.write(Encrypt(session_key, file.serialize()));
+            // creating file object
+            FileToSend file = new FileToSend(filename, Files.readAllBytes(Paths.get(filename)));
+
+            // waiting for 2 cycles before actually sending
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            // encrypting object and sending
+            out.write(crypto.Encrypt(file.serialize()));
 
             System.out.println("SYSTEM: file was sent");
         } else {
@@ -163,33 +184,18 @@ public class Chat extends Thread {
             System.out.println("SYSTEM: file doesn't exist, aborting ...");
 
             // TODO: check if useless
-            out.writeUTF(org.bouncycastle.util.encoders.Hex.toHexString(
-                    Encrypt(session_key,send_file_error)));
+            out.write(crypto.Encrypt(send_file_error));
         }
     }
 
     private void receiveFile() throws IOException {
         System.out.println("SYSTEM: receiving file ...");
 
-        // waiting for file to be sent
-        // TODO: make more intelligent
-        try {
-            Thread.sleep(1000);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
 
-        // receiving file
-        int count = in.available();
-        byte[] file_bin = new byte[count];
-
-        if (in.read(file_bin) == 0) {
-            System.out.println("SYSTEM: file wasn't received. aborting ...");
-            return;
-        }
+        byte[] file_bin = receiveBytes(1000, false);
 
         // decrypting file
-        FileToSend file = deserialize(Decrypt(session_key, file_bin));
+        FileToSend file = deserialize(crypto.Decrypt(file_bin));
 
         // saving file
         assert file != null;
@@ -200,8 +206,8 @@ public class Chat extends Thread {
             System.out.println("SYSTEM: file wasn't saved");
 
         // comparing checksum
-        String recalc_checksum = getFileCheckSum(file.getName());
-        System.out.println("SYSTEM: sent file checksum:\t\t" + file.getChecksum());
+        String recalc_checksum = crypto.getFileMd5(file.getName());
+        System.out.println("SYSTEM: sent file checksum:\t" + file.getChecksum());
         System.out.println("SYSTEM: received file checksum:\t" + recalc_checksum);
 
         assert recalc_checksum != null;
@@ -211,6 +217,31 @@ public class Chat extends Thread {
             System.out.println("SYSTEM: checksums are different");
     }
 
+    private static byte[] receiveBytes(int sleep, boolean ignore) {
+        if (sleep > 0)
+            try {
+                Thread.sleep(sleep);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
+        // receiving file
+        int count = 0;
+        byte[] bin_arr = null;
+        try {
+            count = in.available();
+
+            bin_arr = new byte[count];
+
+            if (in.read(bin_arr) == 0 && !ignore) {
+                System.out.println("SYSTEM: data wasn't received. aborting ...");
+//                return null;
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return bin_arr;
+    }
 
     public void run() {
         while (running) {
@@ -243,17 +274,30 @@ public class Chat extends Thread {
 
 
     public static void main(String[] args) {
-        System.out.println("1) To start a server");
-        System.out.println("2) To start a client");
-
         brin = new BufferedReader(new InputStreamReader(System.in));
         int choice = 0;
+        String type = "";
+
+        // TODO: add while until correct choices are made
+        System.out.println("Enter encryption method: (RSA or DES)");
+
+        try {
+            type = brin.readLine();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        crypto = new crypto(type);
+
+
+        System.out.println("1) To start a server");
+        System.out.println("2) To start a client");
 
         try {
             choice = Integer.parseInt(brin.readLine());
         } catch (IOException e) {
             e.printStackTrace();
         }
+
 
         switch (choice) {
             case 1:
@@ -266,6 +310,7 @@ public class Chat extends Thread {
                 System.out.println("SYSTEM: enter a valid number");
                 break;
         }
+
         running = true;
         Thread send = new Chat(true);
         Thread rcvd = new Chat(false);

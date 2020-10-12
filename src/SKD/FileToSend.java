@@ -2,17 +2,16 @@ package SKD;
 
 import java.io.*;
 
-import static SKD.crypto.getBytesCheckSum;
 
 public class FileToSend implements Serializable {
     private String name;
-    private byte[] payload;
-    private String checksum;
+    private final byte[] payload;
+    private final String checksum;
 
     public FileToSend(String name, byte[] payload) {
         this.name = name;
         this.payload = payload;
-        this.checksum = getBytesCheckSum(payload);
+        this.checksum = crypto.getBytesMd5(payload);
     }
 
     public String getName() {
@@ -32,7 +31,7 @@ public class FileToSend implements Serializable {
     }
 
     public int saveFile() {
-        OutputStream os = null;
+        OutputStream os;
         try {
             os = new FileOutputStream(this.name);
             os.write(payload);
