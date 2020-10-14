@@ -56,7 +56,7 @@ public class crypto {
 
     public byte[] Encrypt(String plain_text) {
         if (type.equals("RSA")) {
-            System.out.println("SYSTEM: length to encrypt " + plain_text.length());
+//            System.out.println("SYSTEM: length to encrypt " + plain_text.length());
             return EncryptRsa(plain_text);
         } else if (type.equals("DES")) {
             return EncryptDes(session_key, plain_text);
@@ -66,11 +66,11 @@ public class crypto {
 
     public byte[] Encrypt(byte[] data) throws IOException {
         if (type.equals("RSA")) {
-//            System.out.println("SYSTEM: length of binary to encrypt " + data.length);
+            RsaCipher.init(true, remotePublicKey);
+//            System.out.println("SYSTEM: length of orig binary to encrypt " + data.length);
             // checking for length constraint and splitting if needed
-            // TODO: add calculation of the longest possible 'message'/chunksize
             if (data.length > 128) {
-                int chunk_size = 128;
+                int chunk_size = RsaCipher.getInputBlockSize();
                 int start = 0;
                 byte[] temp;
                 ByteArrayOutputStream bos = new ByteArrayOutputStream();
@@ -105,9 +105,10 @@ public class crypto {
 //            System.out.println("Decrypting length: " + data.length + " -- " + org.bouncycastle.util.encoders.Hex.toHexString(data));
             // with key size 1024, all messages has size 256
             // TODO: add calculation of the longest possible 'message'/chunksize
-            if (data.length > 128) {
+            RsaCipher.init(false, myKeyPair.getPrivate());
 
-                int chunk_size = 128;
+            if (data.length > 128) {
+                int chunk_size = RsaCipher.getInputBlockSize();
                 int start = 0;
                 byte[] temp;
                 ByteArrayOutputStream bos = new ByteArrayOutputStream();
@@ -115,14 +116,15 @@ public class crypto {
                 for (int i = 0; i < data.length / (double) chunk_size; i++) {
                     temp = Arrays.copyOfRange(data, start, start + chunk_size);
 //                    System.out.println("SYSTEM: length of temp binary to encrypt " + temp.length);
-                    bos.write(Decrypt(temp));
+                    bos.write(DecryptRsa(temp));
                     start += chunk_size;
                 }
+                // cleaning zeroes at the end
                 return bos.toByteArray();
             }
             return DecryptRsa(data);
         } else if (type.equals("DES")) {
-            return DecryptDes(session_key, data);
+            return deleteTrailing(DecryptDes(session_key, data));
         }
         return null;
     }
@@ -178,7 +180,6 @@ public class crypto {
 //    }
 
     private static byte[] DecryptDes(byte[] bin_key, byte[] cipherText) {
-//        byte[] bin_key = key.getBytes();
         BufferedBlockCipher cipher = new PaddedBufferedBlockCipher(new CBCBlockCipher(new DESEngine()));
         cipher.init(false, new KeyParameter(bin_key));
         byte[] rv = new byte[cipher.getOutputSize(cipherText.length)];
@@ -214,29 +215,32 @@ public class crypto {
 //        byte[] plain_text = plain_text.getBytes();
 
         // Initializing the RSA object for Encryption with RSA public key. Remember, for encryption, public key is needed
-        AsymmetricBlockCipher cipher = new RSAEngine();
+//        AsymmetricBlockCipher cipher = new RSAEngine();
 
         // Initializing the RSA object for Encryption with RSA public key. Remember, for encryption, public key is needed
 //        cipher.init(true, publicKey);
-        RsaCipher.init(true, remotePublicKey);
+
+
+//        System.out.println("BLOCK SIZE INPUT: " + RsaCipher.getInputBlockSize() + " OUTPUT: " + RsaCipher.getOutputBlockSize());
         //Encrypting the input bytes
         byte[] cipheredBytes = new byte[0];
         try {
-//            System.out.println("Encrypting length: " + org.bouncycastle.util.encoders.Hex.toHexString(plain_text));
+//            System.out.println("Encrypting length: " + plain_text.length + " - " + org.bouncycastle.util.encoders.Hex.toHexString(plain_text));
             cipheredBytes = RsaCipher.processBlock(plain_text, 0, plain_text.length);
         } catch (InvalidCipherTextException e) {
             e.printStackTrace();
         }
-
 //        System.out.println("Encrypted data: \n" + org.bouncycastle.util.encoders.Hex.toHexString(cipheredBytes));
         return cipheredBytes;
     }
 
     public static byte[] DecryptRsa(byte[] cipherText) {
         // Extracting the private key from the pair
-        RsaCipher.init(false, myKeyPair.getPrivate());
+
+//        System.out.println("BLOCK SIZE INPUT: " + RsaCipher.getInputBlockSize() + " OUTPUT: " + RsaCipher.getOutputBlockSize());
         byte[] deciphered = new byte[0];
         try {
+//            System.out.println("Decrypting length: " + cipherText.length + " - " + org.bouncycastle.util.encoders.Hex.toHexString(cipherText));
             deciphered = RsaCipher.processBlock(cipherText, 0, cipherText.length);
         } catch (InvalidCipherTextException e) {
             e.printStackTrace();
@@ -326,16 +330,16 @@ public class crypto {
             RsaCipher = new RSAEngine();
             if (isServer) {
                 // returning my public key
-                System.out.println("server key pair" + Arrays.toString(serializePubKey(myKeyPair)));
+                System.out.println("SYSTEM: server key pair" + Arrays.toString(serializePubKey(myKeyPair)));
                 return serializePubKey(myKeyPair);
             } else {
                 // saving remote public key
 //                remotePublicKey = (RSAKeyParameters) Deserialize(key);
-                System.out.println("client remote key " + Arrays.toString(key));
+                System.out.println("SYSTEM: client remote key " + Arrays.toString(key));
                 remotePublicKey = deserializePubKey(key);
 
                 // returning my public key
-                System.out.println("client my key serialize " + Arrays.toString(serializePubKey(myKeyPair)));
+                System.out.println("SYSTEM: client my key serialize " + Arrays.toString(serializePubKey(myKeyPair)));
                 return serializePubKey(myKeyPair);
             }
 
@@ -369,7 +373,7 @@ public class crypto {
         return (RSAKeyParameters) PublicKeyFactory.createKey(bytes);
     }
 
-    private byte[] trim(byte[] packet) {
+    public byte[] trim(byte[] packet) {
         byte[] temp;
         int c = 0;
         for (byte x : packet)
@@ -378,5 +382,15 @@ public class crypto {
         temp = new byte[c];
         if (c >= 0) System.arraycopy(packet, 0, temp, 0, c);
         return temp;
+    }
+    public byte[] deleteTrailing(byte[] packet) {
+//        byte[] input = /* whatever */;
+        int i = packet.length;
+        while (i-- > 0 && packet[i] == 0) {}
+
+        byte[] output = new byte[i+1];
+        System.arraycopy(packet, 0, output, 0, i+1);
+
+        return output;
     }
 }

@@ -13,8 +13,8 @@ import static SKD.FileToSend.deserialize;
 
 public class Chat extends Thread {
 
-    private static DataOutputStream out;
-    private static DataInputStream in;
+    private static BufferedOutputStream out;
+    private static BufferedInputStream in;
     private static Socket socket;
     private static BufferedReader brin;
     private final boolean isSender;
@@ -23,8 +23,6 @@ public class Chat extends Thread {
     private final String send_file_word = "send()";
     private final String send_file_error = "send_err()";
 
-    private static final String master_key = "2ae164ad";   // shared key
-    private static String session_key = "";
     private static crypto crypto;
 
     public Chat(boolean isSender) {
@@ -44,8 +42,10 @@ public class Chat extends Thread {
 
             System.out.println("SYSTEM: just connected to " + socket.getRemoteSocketAddress());
 
-            in = new DataInputStream(socket.getInputStream());
-            out = new DataOutputStream(socket.getOutputStream());
+            socket.setReceiveBufferSize(256 * 1024 * 1024);
+            socket.setReceiveBufferSize(256 * 1024 * 1024);
+            in = new BufferedInputStream(socket.getInputStream());
+            out = new BufferedOutputStream(socket.getOutputStream());
             out.flush();
 
 
@@ -56,7 +56,7 @@ public class Chat extends Thread {
 //            System.out.println("SYSTEM: encrypted message: " + org.bouncycastle.util.encoders.Hex.toHexString(enc_msg));
 
             out.write(enc_msg);
-
+            out.flush();
             // only for asymmetric encryption
             byte[] rpk = receiveBytes(2000, false);
             System.out.println("server remote public" + Arrays.toString(rpk));
@@ -73,11 +73,14 @@ public class Chat extends Thread {
         try {
             System.out.println("SYSTEM: Connecting to " + serverName + " on port " + port);
             socket = new Socket(serverName, port);
+            socket.setReceiveBufferSize(32 * 1024 * 1024);
+            socket.setReceiveBufferSize(32 * 1024 * 1024);
 
             System.out.println("SYSTEM: Just connected to " + socket.getRemoteSocketAddress());
 
-            out = new DataOutputStream(socket.getOutputStream());
-            in = new DataInputStream(socket.getInputStream());
+
+            out = new BufferedOutputStream(socket.getOutputStream());
+            in = new BufferedInputStream(socket.getInputStream());
 
             // Encrypting connection
             System.out.println("SYSTEM: encrypting connection");
@@ -87,8 +90,9 @@ public class Chat extends Thread {
 //            System.out.println("client: " + new String(rcvd_msg, StandardCharsets.UTF_8));
             // saving remote public key
             // sending my key (for asymmetric encryption only)
-            out.write(crypto.keyExchange(false, rcvd_msg));
 
+            out.write(crypto.keyExchange(false, rcvd_msg));
+            out.flush();
 //            System.out.println("SYSTEM: encrypted session key: " + rcvd_msg);
 //
 //            byte[] dec_msg = crypto.DecryptDes(master_key, org.bouncycastle.util.encoders.Hex.decodeStrict(rcvd_msg));
@@ -121,6 +125,7 @@ public class Chat extends Thread {
 
                 // Sending the message
                 out.write(toSend);
+                out.flush();
             }
         } catch (IOException e) {
             e.printStackTrace();
@@ -131,7 +136,7 @@ public class Chat extends Thread {
         try {
             byte[] bin_arr = receiveBytes(0, true);
             if (bin_arr.length > 0) {
-                System.out.println(">>> ENC: " + org.bouncycastle.util.encoders.Hex.toHexString(bin_arr));
+//                System.out.println(">>> ENC: " + org.bouncycastle.util.encoders.Hex.toHexString(bin_arr));
 
                 // Decrypting a message
                 String toPrint = new String(crypto.Decrypt(bin_arr), StandardCharsets.UTF_8)
@@ -165,10 +170,26 @@ public class Chat extends Thread {
         // sending file
         if (Files.exists(Paths.get(filename))) {
             // notify about file sending
-            out.write(crypto.Encrypt(send_file_word));
+            // encrypting object and sending
+            byte[] toSend = crypto.Encrypt(new FileToSend(filename, Files.readAllBytes(Paths.get(filename))).serialize());
 
             // creating file object
-            FileToSend file = new FileToSend(filename, Files.readAllBytes(Paths.get(filename)));
+//            FileToSend file =  Files.readAllBytes(Paths.get(filename)));
+
+            out.write(crypto.Encrypt(send_file_word));
+            out.flush();
+
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
+            // sending file size
+            out.write(crypto.Encrypt(String.valueOf(toSend.length)));
+            out.flush();
+
+
 
             // waiting for 2 cycles before actually sending
             try {
@@ -176,8 +197,44 @@ public class Chat extends Thread {
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
-            // encrypting object and sending
-            out.write(crypto.Encrypt(file.serialize()));
+
+
+            System.out.println("SYSTEM: encrypted file len " + toSend.length);
+            OutputStream os;
+            try {
+                os = new FileOutputStream("encr.bin");
+                os.write(toSend);
+                os.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+            // SENDING IN CHUNKS
+            if (toSend.length > 32*1024) {
+                int chunk_size = 32*1024;
+                int start = 0;
+                byte[] temp;
+
+                for (int i = 0; i < toSend.length / (double) chunk_size; i++) {
+                    try {
+                        Thread.sleep(10);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                    temp = Arrays.copyOfRange(toSend, start, start + chunk_size);
+//                    System.out.println("SYSTEM: length of temp binary to encrypt " + temp.length);
+                    out.write(temp);
+                    out.flush();
+                    start += chunk_size;
+                }
+            } else {
+                out.write(toSend);
+                out.flush();
+            }
+            // SENDING IN CHUNKS END
+
+//            out.write(toSend);
+//            out.flush();
 
             System.out.println("SYSTEM: file was sent");
         } else {
@@ -192,11 +249,55 @@ public class Chat extends Thread {
     private void receiveFile() throws IOException {
         System.out.println("SYSTEM: receiving file ...");
 
+        // TODO: add calculations for sleep time based on file size
+        // TODO add receving bytes in packets
+        int file_size = Integer.parseInt(new String(crypto.Decrypt(receiveBytes(500, false)), StandardCharsets.UTF_8));
+        System.out.println("SYSTEM: file size to receive: " + file_size);
+        try {
+            Thread.sleep(300);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        byte[] file_bin;
+        if (file_size > 32*1024) {
 
-        byte[] file_bin = receiveBytes(1000, false);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            while (bos.toByteArray().length < file_size) {
+                byte[] temp = receiveBytes(10, true);
+//            System.out.println("block " + temp.length);
+                bos.write(temp);
+            }
+            file_bin = crypto.deleteTrailing(bos.toByteArray());
+        }
+        else{
+            file_bin = receiveBytes(1000, false);
+        }
 
+        System.out.println("SYSTEM: received file bin len: " + file_bin.length);
         // decrypting file
-        FileToSend file = deserialize(crypto.Decrypt(file_bin));
+        byte[] dcrptd = crypto.Decrypt(file_bin);
+
+        // saving to temp file
+        OutputStream os;
+        try {
+            os = new FileOutputStream("rcvd.bin");
+            os.write(file_bin);
+            os.close();
+        } catch (
+                IOException e) {
+            e.printStackTrace();
+        }
+
+        try {
+            os = new FileOutputStream("dcrp.bin");
+            os.write(dcrptd);
+            os.close();
+        } catch (
+                IOException e) {
+            e.printStackTrace();
+        }
+
+        FileToSend file = deserialize(dcrptd);
 
         // saving file
         assert file != null;
@@ -208,8 +309,8 @@ public class Chat extends Thread {
 
         // comparing checksum
         String recalc_checksum = crypto.getFileMd5(file.getName());
-        System.out.println("SYSTEM: sent file checksum:\t" + file.getChecksum());
-        System.out.println("SYSTEM: received file checksum:\t" + recalc_checksum);
+//        System.out.println("SYSTEM: sent file checksum:\t" + file.getChecksum());
+//        System.out.println("SYSTEM: received file checksum:\t" + recalc_checksum);
 
         assert recalc_checksum != null;
         if (recalc_checksum.equals(file.getChecksum()))
