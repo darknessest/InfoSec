@@ -18,7 +18,7 @@ public class Chat extends Thread {
     private static Socket socket;
     private static BufferedReader brin;
     private final boolean isSender;
-    private static boolean running = false;
+    private static boolean running = false;     // TODO: make volatile
     private final String exit_word = "exit()";
     private final String send_file_word = "send()";
     private final String send_file_error = "send_err()";
@@ -32,7 +32,6 @@ public class Chat extends Thread {
 
     private static void initServer(int port) {
         try {
-            int choice = 0;
             ServerSocket serverSocket = new ServerSocket(port);
             serverSocket.setSoTimeout(100000);  // 100 sec
 
@@ -136,7 +135,7 @@ public class Chat extends Thread {
         try {
             byte[] bin_arr = receiveBytes(0, true);
             if (bin_arr.length > 0) {
-//                System.out.println(">>> ENC: " + org.bouncycastle.util.encoders.Hex.toHexString(bin_arr));
+                System.out.println(">>> ENC: " + org.bouncycastle.util.encoders.Hex.toHexString(bin_arr));
 
                 // Decrypting a message
                 String toPrint = new String(crypto.Decrypt(bin_arr), StandardCharsets.UTF_8)
@@ -169,13 +168,12 @@ public class Chat extends Thread {
 
         // sending file
         if (Files.exists(Paths.get(filename))) {
-            // notify about file sending
+
             // encrypting object and sending
+            // creating file object
             byte[] toSend = crypto.Encrypt(new FileToSend(filename, Files.readAllBytes(Paths.get(filename))).serialize());
 
-            // creating file object
-//            FileToSend file =  Files.readAllBytes(Paths.get(filename)));
-
+            // notify about file sending
             out.write(crypto.Encrypt(send_file_word));
             out.flush();
 
@@ -189,8 +187,6 @@ public class Chat extends Thread {
             out.write(crypto.Encrypt(String.valueOf(toSend.length)));
             out.flush();
 
-
-
             // waiting for 2 cycles before actually sending
             try {
                 Thread.sleep(1000);
@@ -200,18 +196,18 @@ public class Chat extends Thread {
 
 
             System.out.println("SYSTEM: encrypted file len " + toSend.length);
-            OutputStream os;
-            try {
-                os = new FileOutputStream("encr.bin");
-                os.write(toSend);
-                os.close();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
+//            OutputStream os;
+//            try {
+//                os = new FileOutputStream("encr.bin");
+//                os.write(toSend);
+//                os.close();
+//            } catch (IOException e) {
+//                e.printStackTrace();
+//            }
 
             // SENDING IN CHUNKS
-            if (toSend.length > 32*1024) {
-                int chunk_size = 32*1024;
+            if (toSend.length > 32 * 1024) {
+                int chunk_size = 32 * 1024;
                 int start = 0;
                 byte[] temp;
 
@@ -222,7 +218,6 @@ public class Chat extends Thread {
                         e.printStackTrace();
                     }
                     temp = Arrays.copyOfRange(toSend, start, start + chunk_size);
-//                    System.out.println("SYSTEM: length of temp binary to encrypt " + temp.length);
                     out.write(temp);
                     out.flush();
                     start += chunk_size;
@@ -232,9 +227,6 @@ public class Chat extends Thread {
                 out.flush();
             }
             // SENDING IN CHUNKS END
-
-//            out.write(toSend);
-//            out.flush();
 
             System.out.println("SYSTEM: file was sent");
         } else {
@@ -259,7 +251,7 @@ public class Chat extends Thread {
             e.printStackTrace();
         }
         byte[] file_bin;
-        if (file_size > 32*1024) {
+        if (file_size > 32 * 1024) {
 
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             while (bos.toByteArray().length < file_size) {
@@ -268,8 +260,7 @@ public class Chat extends Thread {
                 bos.write(temp);
             }
             file_bin = crypto.deleteTrailing(bos.toByteArray());
-        }
-        else{
+        } else {
             file_bin = receiveBytes(1000, false);
         }
 
@@ -278,24 +269,24 @@ public class Chat extends Thread {
         byte[] dcrptd = crypto.Decrypt(file_bin);
 
         // saving to temp file
-        OutputStream os;
-        try {
-            os = new FileOutputStream("rcvd.bin");
-            os.write(file_bin);
-            os.close();
-        } catch (
-                IOException e) {
-            e.printStackTrace();
-        }
-
-        try {
-            os = new FileOutputStream("dcrp.bin");
-            os.write(dcrptd);
-            os.close();
-        } catch (
-                IOException e) {
-            e.printStackTrace();
-        }
+//        OutputStream os;
+//        try {
+//            os = new FileOutputStream("rcvd.bin");
+//            os.write(file_bin);
+//            os.close();
+//        } catch (
+//                IOException e) {
+//            e.printStackTrace();
+//        }
+//
+//        try {
+//            os = new FileOutputStream("dcrp.bin");
+//            os.write(dcrptd);
+//            os.close();
+//        } catch (
+//                IOException e) {
+//            e.printStackTrace();
+//        }
 
         FileToSend file = deserialize(dcrptd);
 
@@ -319,10 +310,10 @@ public class Chat extends Thread {
             System.out.println("SYSTEM: checksums are different");
     }
 
-    private static byte[] receiveBytes(int sleep, boolean ignore) {
-        if (sleep > 0)
+    private static byte[] receiveBytes(int timeout, boolean ignore) {
+        if (timeout > 0)
             try {
-                Thread.sleep(sleep);
+                Thread.sleep(timeout);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
@@ -337,7 +328,6 @@ public class Chat extends Thread {
 
             if (in.read(bin_arr) == 0 && !ignore) {
                 System.out.println("SYSTEM: data wasn't received. aborting ...");
-//                return null;
             }
         } catch (IOException e) {
             e.printStackTrace();
